@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from functools import cached_property
@@ -11,7 +12,12 @@ from pathlib import Path
 from marimo import _loggers
 from marimo._dependencies.dependencies import DependencyManager
 from marimo._environments import script_metadata
-from marimo._environments.uv import UvCommandError, find_uv_bin, uv
+from marimo._environments.uv import (
+    UvCommandError,
+    UvError,
+    find_uv_bin,
+    uv,
+)
 from marimo._runtime.packages.module_name_to_pypi_name import (
     module_name_to_pypi_name,
 )
@@ -19,6 +25,7 @@ from marimo._runtime.packages.package_manager import (
     CanonicalizingPackageManager,
     LogCallback,
     PackageDescription,
+    _normalize_package_name,
 )
 from marimo._runtime.packages.utils import (
     popen_package_command,
@@ -279,6 +286,16 @@ class UvPackageManager(PypiPackageManager):
     SCRIPT_METADATA_MARKER = "# /// script"
     _use_project = True
 
+    def __init__(
+        self,
+        python_exe: str | None = None,
+        script_path: str | None = None,
+    ) -> None:
+        # In script mode, package changes edit the notebook's metadata and
+        # synchronize its script environment; nothing installs imperatively.
+        self._script_path = script_path
+        super().__init__(python_exe)
+
     @classmethod
     def for_pip_install(cls, python_exe: str) -> UvPackageManager:
         """Target an interpreter without changing its uv project."""
@@ -289,6 +306,63 @@ class UvPackageManager(PypiPackageManager):
     @cached_property
     def _uv_bin(self) -> str:
         return find_uv_bin()
+
+    def _declared_dependencies(self, script_path: str) -> set[str]:
+        """Normalized names declared in the notebook's script metadata."""
+        try:
+            with open(script_path, encoding="utf-8") as f:
+                project = script_metadata.loads(f.read()) or {}
+        except (OSError, ValueError):
+            return set()
+        names: set[str] = set()
+        for dep in project.get("dependencies", []):
+            match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", str(dep).strip())
+            if match is not None:
+                names.add(_normalize_package_name(match.group(0)))
+        return names
+
+    def _change_script_environment(
+        self,
+        script_path: str,
+        *,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+        upgrade: bool = False,
+        log_callback: LogCallback | None = None,
+    ) -> bool:
+        """Edits the manifest and synchronizes its script environment.
+
+        uv writes the constraint and resolves with the metadata's full
+        semantics, streaming its output to `log_callback` line by line.
+        Failures stream the solver's message rather than pointing at the
+        terminal.
+        """
+        from marimo._environments import environment
+
+        try:
+            if add:
+                script_metadata.add_dependencies(
+                    script_path,
+                    add,
+                    upgrade=upgrade,
+                    on_output=log_callback,
+                )
+            if remove:
+                script_metadata.remove_dependencies(
+                    script_path, remove, on_output=log_callback
+                )
+            environment.sync_notebook(script_path, on_output=log_callback)
+            return True
+        except (script_metadata.ScriptMetadataError, UvError) as e:
+            message = str(e.__cause__ or e)
+            LOGGER.error(
+                "Failed to update script environment for %s: %s",
+                script_path,
+                message,
+            )
+            if log_callback is not None:
+                log_callback(message + "\n")
+            return False
 
     def _is_cache_write_error(self, output_text: str) -> bool:
         """Check if the output text indicates a cache write error.
@@ -341,6 +415,17 @@ class UvPackageManager(PypiPackageManager):
         log_callback: LogCallback | None = None,
     ) -> bool:
         """Installation logic with fallback to --no-cache on cache write errors."""
+        import asyncio
+
+        if self._script_path is not None:
+            return await asyncio.to_thread(
+                self._change_script_environment,
+                self._script_path,
+                add=split_packages(package),
+                upgrade=upgrade,
+                log_callback=log_callback,
+            )
+
         LOGGER.info(
             f"Installing in {package} with 'uv {'add' if self.is_in_uv_project else 'pip install'}'"
         )
@@ -440,6 +525,13 @@ class UvPackageManager(PypiPackageManager):
             import_namespaces_to_remove: List of import namespaces to remove
             upgrade: Whether to upgrade the packages
         """
+        if self._script_path is not None:
+            # Script mode: install and uninstall already wrote these
+            # packages through the script environment. Only namespace
+            # changes from cell registration remain.
+            packages_to_add = None
+            packages_to_remove = None
+
         packages_to_add = packages_to_add or []
         packages_to_remove = packages_to_remove or []
         import_namespaces_to_add = import_namespaces_to_add or []
@@ -559,6 +651,35 @@ class UvPackageManager(PypiPackageManager):
         return uv_lock_path.exists() and pyproject_path.exists()
 
     async def uninstall(self, package: str, group: str | None = None) -> bool:
+        if self._script_path is not None:
+            import asyncio
+
+            requested = split_packages(package)
+            declared = await asyncio.to_thread(
+                self._declared_dependencies, self._script_path
+            )
+            undeclared = [
+                pkg
+                for pkg in requested
+                if _normalize_package_name(pkg) not in declared
+            ]
+            if undeclared:
+                # A transitive dependency is not the notebook's to remove;
+                # removing it from the environment alone would be undone
+                # by the next synchronization.
+                LOGGER.warning(
+                    "%s is not declared in the notebook's script metadata "
+                    "(likely a dependency of another package), so it "
+                    "cannot be removed.",
+                    ", ".join(undeclared),
+                )
+                return False
+            return await asyncio.to_thread(
+                self._change_script_environment,
+                self._script_path,
+                remove=requested,
+            )
+
         uninstall_cmd: list[str]
         if self.is_in_uv_project:
             LOGGER.info(f"Uninstalling {package} with 'uv remove'")
