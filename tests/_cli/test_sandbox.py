@@ -718,3 +718,55 @@ def test_sandbox_exit_codes_propagate(tmp_path: Path) -> None:
         ):
             result = runner.invoke(cli_main, command)
         assert result.exit_code == 3, (command, result.output)
+
+
+def test_resolve_sandbox_backends(tmp_path: Path) -> None:
+    from marimo._cli.sandbox import resolve_sandbox
+
+    notebook = tmp_path / "nb.py"
+    notebook.write_text("import marimo\n")
+
+    mode, backend = resolve_sandbox("pixi", False, str(notebook))
+    assert mode is SandboxMode.SINGLE
+    assert backend == "pixi"
+
+    mode, backend = resolve_sandbox("uv", False, str(notebook))
+    assert mode is SandboxMode.SINGLE
+    assert backend == "uv"
+
+    mode, backend = resolve_sandbox("pixi", False, str(tmp_path))
+    assert mode is SandboxMode.MULTI
+    assert backend == "pixi"
+
+    mode, backend = resolve_sandbox("pixi", True, str(notebook))
+    assert mode is None
+
+
+def test_strip_sandbox_args() -> None:
+    from marimo._cli.sandbox import _strip_sandbox_args
+
+    assert _strip_sandbox_args(
+        ["-m", "marimo", "edit", "--sandbox", "nb.py"]
+    ) == ["-m", "marimo", "edit", "nb.py"]
+    assert _strip_sandbox_args(
+        ["-m", "marimo", "edit", "--sandbox=pixi", "nb.py"]
+    ) == ["-m", "marimo", "edit", "nb.py"]
+
+
+def test_no_reprompt_inside_a_sandbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A server launched inside a sandbox must not offer to re-wrap
+    itself in a second one."""
+    from marimo._cli.sandbox import maybe_prompt_run_in_sandbox
+    from marimo._config.settings import GLOBAL_SETTINGS
+
+    notebook = tmp_path / "nb.py"
+    notebook.write_text(
+        '# /// script\n# dependencies = ["numpy"]\n# ///\nimport marimo\n'
+    )
+
+    monkeypatch.setattr(GLOBAL_SETTINGS, "MANAGE_SCRIPT_METADATA", False)
+    monkeypatch.setattr(GLOBAL_SETTINGS, "SANDBOX_MODE", None)
+    monkeypatch.setattr(GLOBAL_SETTINGS, "SANDBOX_BACKEND", "pixi")
+    assert maybe_prompt_run_in_sandbox(str(notebook)) is False

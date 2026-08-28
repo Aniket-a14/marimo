@@ -22,6 +22,7 @@ from marimo import _loggers
 from marimo._environments.uv import (
     UvError,
     require_uv_bin,
+    script_command_env,
     uv,
     uv_stream,
 )
@@ -187,6 +188,7 @@ def sync(
     cwd: str | None = None,
     python_override: str | None = None,
     on_output: Callable[[str], None] | None = None,
+    on_command: Callable[[Sequence[str]], None] | None = None,
 ) -> Environment:
     """Makes the script's environment match its metadata.
 
@@ -194,8 +196,8 @@ def sync(
     directory-scoped uv configuration applies. `python_override` wins
     over the script's `requires-python` (html-wasm export pins the
     Pyodide interpreter). With `on_output`, uv's progress streams to the
-    callback line by line. Raises `UvCommandError` on failure and never
-    mutates `script`.
+    callback line by line; `on_command` receives the exact argv about to
+    run. Raises `UvCommandError` on failure and never mutates `script`.
     """
     ensure_supported_uv()
     args = [
@@ -209,9 +211,17 @@ def sync(
     if python_override is not None:
         args.extend(["--python", python_override])
     if on_output is not None:
-        completed = uv_stream(args, on_output, env=_sync_env(), cwd=cwd)
+        completed = uv_stream(
+            args,
+            on_output,
+            env=script_command_env(),
+            cwd=cwd,
+            on_command=on_command,
+        )
     else:
-        completed = uv(args, env=_sync_env(), cwd=cwd)
+        completed = uv(
+            args, env=script_command_env(), cwd=cwd, on_command=on_command
+        )
     return _parse_report(completed.stdout)
 
 
@@ -346,9 +356,3 @@ def _venv_python(root: str) -> str | None:
 
 def _venv_bin_dir(root: str) -> str:
     return os.path.join(root, "Scripts" if os.name == "nt" else "bin")
-
-
-def _sync_env() -> dict[str, str]:
-    from marimo._environments.uv import script_command_env
-
-    return script_command_env()

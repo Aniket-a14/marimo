@@ -13,9 +13,6 @@ from dataclasses import dataclass
 from marimo import _loggers
 from marimo._environments.environment import (
     ProcessPlan,
-    launch,
-    launch_isolated,
-    sync_notebook,
 )
 from marimo._environments.overlay import runtime_overlay
 from marimo._environments.uv import UvMissingScriptMetadataError
@@ -69,16 +66,22 @@ class AppHostPool:
         # Synchronize the script environment outside the lock (can take
         # many seconds); a notebook without a metadata block runs
         # ephemerally.
+        from marimo._environments import backends
+        from marimo._environments.pixi import PixiError
+
+        backend = backends.current_backend()
         args = ["-m", "marimo._session.app_host.main"]
         overlay = runtime_overlay(additional_deps=get_ipc_kernel_deps())
         try:
-            handle = sync_notebook(abs_path)
-            plan = launch(handle, args, overlay=overlay)
-        except UvMissingScriptMetadataError:
-            import platform
-
-            plan = launch_isolated(
-                args, overlay=overlay, python=platform.python_version()
+            handle = backends.sync_notebook(abs_path, backend=backend)
+            plan = backends.launch(
+                handle, args, backend=backend, overlay=overlay
+            )
+        except (UvMissingScriptMetadataError, PixiError) as e:
+            if not isinstance(e, UvMissingScriptMetadataError):
+                LOGGER.warning("Failed to build script environment: %s", e)
+            plan = backends.launch_fallback(
+                args, backend=backend, overlay=overlay
             )
 
         with self._lock:

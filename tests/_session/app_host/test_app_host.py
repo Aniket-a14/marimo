@@ -262,7 +262,7 @@ class TestAppHostSandbox:
 
         with (
             patch(
-                "marimo._session.app_host.pool.sync_notebook",
+                "marimo._environments.backends.sync_notebook",
                 return_value=handle,
             ) as mock_sync,
             patch(
@@ -300,7 +300,7 @@ class TestAppHostSandbox:
 
         with (
             patch(
-                "marimo._session.app_host.pool.sync_notebook",
+                "marimo._environments.backends.sync_notebook",
             ) as mock_sync,
             patch(
                 "marimo._session.app_host.pool.AppHost",
@@ -326,7 +326,7 @@ class TestAppHostSandbox:
 
         with (
             patch(
-                "marimo._session.app_host.pool.sync_notebook",
+                "marimo._environments.backends.sync_notebook",
                 side_effect=UvMissingScriptMetadataError(
                     ["uv"], 2, "", "no PEP 723 metadata"
                 ),
@@ -359,7 +359,7 @@ class TestAppHostSandbox:
         existing_host = MagicMock()
         existing_host.is_alive.return_value = True
 
-        def sync_and_inject(filename: str) -> Environment:
+        def sync_and_inject(filename: str, **_kwargs: object) -> Environment:
             import os
 
             pool._workers[os.path.abspath(filename)] = existing_host
@@ -369,7 +369,7 @@ class TestAppHostSandbox:
 
         with (
             patch(
-                "marimo._session.app_host.pool.sync_notebook",
+                "marimo._environments.backends.sync_notebook",
                 side_effect=sync_and_inject,
             ),
             patch(
