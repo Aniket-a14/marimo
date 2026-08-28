@@ -18,6 +18,7 @@ from marimo._environments import script_metadata
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
+    from tempfile import TemporaryDirectory
 
     from marimo._environments.environment import Environment, ProcessPlan
     from marimo._environments.script_metadata import MaterializedScript
@@ -165,7 +166,7 @@ class NotebookSandbox:
         adapter: BackendAdapter | None = None,
         reporter: SandboxReporter | None = None,
     ) -> None:
-        self._temporary_directory = None
+        self._temporary_directory: TemporaryDirectory[str] | None = None
         self._source = self._bind_source(source)
         self._reporter = reporter or TerminalSandboxReporter()
         if adapter is None:

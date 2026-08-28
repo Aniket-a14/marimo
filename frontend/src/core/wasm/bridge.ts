@@ -640,6 +640,7 @@ export class PyodideBridge implements RunRequests, EditRequests {
         tags: [],
         version: null,
       },
+      context: { kind: "package-manager", name: "micropip" },
     };
   };
 

@@ -296,7 +296,7 @@ class UvBackendAdapter(_ReportingBackendAdapter):
 
         try:
             completed = uv(
-                ["tree", "--no-dedupe", "--script", target.path],
+                ["tree", "--script", target.path],
                 cwd=target.directory,
             )
         except UvError:
@@ -409,6 +409,7 @@ class PixiBackendAdapter(_ReportingBackendAdapter):
         from marimo._environments.sandbox import PackageState, ResolvedPackage
 
         records = pixi.list_script_packages(target.path, cwd=target.directory)
+        tree = pixi.tree_script_packages(target.path, cwd=target.directory)
         packages = tuple(
             sorted(
                 (
@@ -417,14 +418,14 @@ class PixiBackendAdapter(_ReportingBackendAdapter):
                         version=str(record.get("version", "")),
                     )
                     for record in records
-                    if record.get("name")
+                    if record.get("name") and record.get("kind") == "pypi"
                 ),
                 key=lambda package: package.name,
             )
         )
         return PackageState(
             packages=packages,
-            tree=_pixi_tree(records),
+            tree=_pixi_tree(records, tree),
         )
 
     def launch(
@@ -475,57 +476,37 @@ def _flatten_tree(tree: object) -> tuple[ResolvedPackage, ...]:
     return tuple(sorted(packages, key=lambda package: package.name))
 
 
-def _pixi_tree(records: list[dict[str, object]]) -> DependencyTreeNode:
-    import re
+def _pixi_tree(
+    records: list[dict[str, object]], text: str
+) -> DependencyTreeNode:
+    from marimo._utils.uv_tree import DependencyTreeNode, parse_pixi_tree
 
-    from marimo._utils.uv_tree import (
-        DependencyTag,
-        DependencyTreeNode,
-    )
-
-    by_name = {
-        _normalize_package_name(str(record["name"])): record
+    pypi_names = {
+        _normalize_package_name(str(record["name"]))
         for record in records
-        if record.get("name")
+        if record.get("name") and record.get("kind") == "pypi"
     }
+    parsed = parse_pixi_tree(text)
 
-    def node_for(name: str, stack: frozenset[str]) -> DependencyTreeNode:
-        normalized = _normalize_package_name(name)
-        record = by_name.get(normalized, {"name": name})
-        tags = []
-        kind = record.get("kind")
-        if kind:
-            tags.append(DependencyTag(kind="kind", value=str(kind)))
-        if normalized in stack:
-            tags.append(DependencyTag(kind="cycle", value="true"))
-            return DependencyTreeNode(
-                name=str(record.get("name", name)),
-                version=str(record.get("version", "")) or None,
-                tags=tags,
-                dependencies=[],
-            )
-
-        dependencies = []
-        for dependency in record.get("depends", []) or []:
-            match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", str(dependency))
-            if (
-                match is not None
-                and _normalize_package_name(match.group(0)) in by_name
-            ):
-                dependencies.append(
-                    node_for(match.group(0), stack | {normalized})
-                )
+    def pypi_node(node: DependencyTreeNode) -> DependencyTreeNode | None:
+        if _normalize_package_name(node.name) not in pypi_names:
+            return None
+        dependencies = [
+            filtered
+            for dependency in node.dependencies
+            if (filtered := pypi_node(dependency)) is not None
+        ]
         return DependencyTreeNode(
-            name=str(record.get("name", name)),
-            version=str(record.get("version", "")) or None,
-            tags=tags,
+            name=node.name,
+            version=node.version,
+            tags=node.tags,
             dependencies=dependencies,
         )
 
     roots = [
-        node_for(str(record["name"]), frozenset())
-        for record in records
-        if record.get("name") and record.get("is_explicit") is True
+        filtered
+        for node in parsed.dependencies
+        if (filtered := pypi_node(node)) is not None
     ]
     return DependencyTreeNode(
         name="<root>", version=None, tags=[], dependencies=roots

@@ -4599,6 +4599,9 @@ export interface components {
     };
     /** DependencyTreeResponse */
     DependencyTreeResponse: {
+      context:
+        | components["schemas"]["SandboxPackageContext"]
+        | components["schemas"]["PackageManagerContext"];
       tree: null | components["schemas"]["DependencyTreeNode"];
     };
     /**
@@ -4634,15 +4637,6 @@ export interface components {
       type: "configuration" | "environment";
     };
     /**
-     * DialectHidesWhen
-     * @description Hide this suggestion when a live SQL engine dialect contains a substring.
-     */
-    DialectHidesWhen: {
-      /** @enum {unknown} */
-      kind: "dialect";
-      substrings: string[];
-    };
-    /**
      * DiagnosticsConfig
      * @description Configuration options for diagnostics.
      *
@@ -4654,6 +4648,15 @@ export interface components {
     DiagnosticsConfig: {
       enabled?: boolean;
       sql_linter?: boolean;
+    };
+    /**
+     * DialectHidesWhen
+     * @description Hide this suggestion when a live SQL engine dialect contains a substring.
+     */
+    DialectHidesWhen: {
+      /** @enum {unknown} */
+      kind: "dialect";
+      substrings: string[];
     };
     /**
      * DiscoverDataSourcesCommand
@@ -6221,6 +6224,12 @@ export interface components {
       /** @enum {unknown} */
       manager: "pip" | "pixi" | "poetry" | "rye" | "uv";
     };
+    /** PackageManagerContext */
+    PackageManagerContext: {
+      /** @enum {unknown} */
+      kind: "package-manager";
+      name: string;
+    };
     /** PackageOperationResponse */
     PackageOperationResponse: {
       /** @default null */
@@ -6639,6 +6648,13 @@ export interface components {
       /** @enum {unknown} */
       kind: "safe-literal";
       value: string;
+    };
+    /** SandboxPackageContext */
+    SandboxPackageContext: {
+      /** @enum {unknown} */
+      backend: "pixi" | "uv";
+      /** @enum {unknown} */
+      kind: "sandbox";
     };
     /** SaveAppConfigurationRequest */
     SaveAppConfigurationRequest: {
